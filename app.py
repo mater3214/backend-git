@@ -390,12 +390,24 @@ def create_flex_message(payload):
 
 
 def sync_google_sheet_to_postgres():
+    try:
         # 1. Connect to Google Sheets
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        scope = ['https://spreadsheets.google.com/feeds', 
+                'https://www.googleapis.com/auth/drive',
+                'https://www.googleapis.com/auth/spreadsheets']
         creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
         client = gspread.authorize(creds)
-        sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
-
+        
+        # เพิ่มการตรวจสอบว่าเปิด sheet ได้หรือไม่
+        try:
+            sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
+        except gspread.SpreadsheetNotFound:
+            print(f"❌ ไม่พบ Google Sheet ชื่อ '{SHEET_NAME}'")
+            return []
+        except gspread.WorksheetNotFound:
+            print(f"❌ ไม่พบ Worksheet ชื่อ '{WORKSHEET_NAME}' ใน Sheet '{SHEET_NAME}'")
+            return []
+        
         records = sheet.get_all_records()
         
         # ดึง ticket_id จาก Google Sheets
@@ -403,7 +415,8 @@ def sync_google_sheet_to_postgres():
         
         # 2. Connect to PostgreSQL
         conn = psycopg2.connect(
-            dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+            dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, 
+            host=DB_HOST, port=DB_PORT
         )
         cur = conn.cursor()
         
@@ -507,8 +520,14 @@ def sync_google_sheet_to_postgres():
                     cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
 
         conn.commit()
-        conn.close()
         return new_tickets
+        
+    except Exception as e:
+        print(f"❌ Error in sync_google_sheet_to_postgres: {str(e)}")
+        return []
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 def add_cors_headers(f):
     @wraps(f)
@@ -602,54 +621,79 @@ def mark_all_notifications_read():
     return jsonify({"success": True})
 
 def create_tickets_table():
-    conn = psycopg2.connect(
-        dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
-    )
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS tickets (
-        ticket_id TEXT PRIMARY KEY,
-        user_id TEXT,
-        email TEXT,
-        name TEXT,
-        phone TEXT,
-        department TEXT,
-        created_at TIMESTAMP,
-        status TEXT,
-        appointment TEXT,
-        requested TEXT,
-        report TEXT,
-        type TEXT,
-        textbox TEXT
-    );
-    """)
+    max_retries = 3
+    retry_count = 0
     
-    # Add notifications table
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS notifications (
-        id SERIAL PRIMARY KEY,
-        message TEXT NOT NULL,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        read BOOLEAN DEFAULT FALSE
-    );
-    """)
-    
-    # เพิ่มตาราง messages สำหรับเก็บประวัติการสนทนา
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS messages (
-        id SERIAL PRIMARY KEY,
-        ticket_id TEXT REFERENCES tickets(ticket_id),
-        admin_id TEXT,
-        sender_name TEXT,
-        message TEXT NOT NULL,
-        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        is_read BOOLEAN DEFAULT FALSE,
-        is_admin_message BOOLEAN DEFAULT FALSE
-    );
-    """)
-    
-    conn.commit()
-    conn.close()
+    while retry_count < max_retries:
+        try:
+            conn = psycopg2.connect(
+                dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, 
+                host=DB_HOST, port=DB_PORT
+            )
+            cur = conn.cursor()
+            
+            # สร้างตาราง tickets
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS tickets (
+                ticket_id TEXT PRIMARY KEY,
+                user_id TEXT,
+                email TEXT,
+                name TEXT,
+                phone TEXT,
+                department TEXT,
+                created_at TIMESTAMP,
+                status TEXT,
+                appointment TEXT,
+                requested TEXT,
+                report TEXT,
+                type TEXT,
+                textbox TEXT
+            );
+            """)
+            
+            # สร้างตาราง notifications
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id SERIAL PRIMARY KEY,
+                message TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                read BOOLEAN DEFAULT FALSE
+            );
+            """)
+            
+            # สร้างตาราง messages
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id SERIAL PRIMARY KEY,
+                ticket_id TEXT REFERENCES tickets(ticket_id),
+                admin_id TEXT,
+                sender_name TEXT,
+                message TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_read BOOLEAN DEFAULT FALSE,
+                is_admin_message BOOLEAN DEFAULT FALSE
+            );
+            """)
+            
+            conn.commit()
+            print("✅ Created tables successfully")
+            return True
+            
+        except psycopg2.OperationalError as e:
+            retry_count += 1
+            print(f"⚠️ Retry {retry_count} of {max_retries} - Database connection error: {str(e)}")
+            if retry_count == max_retries:
+                print("❌ Failed to connect to database after retries")
+                return False
+            time.sleep(2)
+            
+        except Exception as e:
+            print(f"❌ Error creating tables: {str(e)}")
+            return False
+            
+        finally:
+            if 'conn' in locals():
+                conn.close()
 
 
 def parse_datetime(date_str):
@@ -1614,6 +1658,20 @@ def add_message():
         if 'conn' in locals():
             conn.close()
 
+@app.route('/test-sheets')
+def test_sheets():
+    try:
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+        client = gspread.authorize(creds)
+        
+        # Try listing all spreadsheets
+        sheets = client.openall()
+        return jsonify({"status": "success", "sheets": [s.title for s in sheets]})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @app.route('/api/messages/mark-read', methods=['POST'])
 def mark_messages_read():
     data = request.json
@@ -1712,6 +1770,16 @@ def sync_route():
         return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
 if __name__ == '__main__':
-    create_tickets_table()
-    sync_google_sheet_to_postgres()
+    if not create_tickets_table():
+        print("❌ Cannot proceed without database tables")
+        exit(1)
+    print("🔄 Starting sync process...")
+    try:
+        new_tickets = sync_google_sheet_to_postgres()
+        if new_tickets is not None:
+            print(f"✅ Sync completed. Found {len(new_tickets)} new tickets")
+        else:
+            print("❌ Sync failed")
+    except Exception as e:
+        print(f"❌ Error during sync: {str(e)}")
     app.run(debug=True)
