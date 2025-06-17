@@ -1,28 +1,31 @@
 from flask import Flask, jsonify, request
 import requests
-from flask_cors import CORS 
+from flask_cors import CORS, cross_origin
 import psycopg2
 import gspread
 from functools import wraps
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 LINE_ACCESS_TOKEN = "0wrW85zf5NXhGWrHRjwxitrZ33JPegxtB749lq9TWRlrlCvfl0CKN9ceTw+kzPqBc6yjEOlV3EJOqUsBNhiFGQu3asN1y6CbHIAkJINhHNWi5gY9+O3+SnvrPaZzI7xbsBuBwe8XdIx33wdAN+79bgdB04t89/1O/w1cDnyilFU="
-
+import time
 app = Flask(__name__)
 
 CORS(app, resources={
     r"/api/*": {
         "origins": ["https://my-frontend-51dy.onrender.com"],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
+        "allow_headers": ["Content-Type", "Authorization"],
+        "supports_credentials": True
     },
     r"/sync-tickets": {
         "origins": ["https://my-frontend-51dy.onrender.com"],
-        "methods": ["GET", "OPTIONS"]
+        "methods": ["GET", "OPTIONS"],
+        "supports_credentials": True
     },
     r"/update-status": {
         "origins": ["https://my-frontend-51dy.onrender.com"],
-        "methods": ["POST", "OPTIONS"]
+        "methods": ["POST", "OPTIONS"],
+        "supports_credentials": True
     }
 })
 
@@ -387,125 +390,125 @@ def create_flex_message(payload):
 
 
 def sync_google_sheet_to_postgres():
-    # 1. Connect to Google Sheets
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    client = gspread.authorize(creds)
-    sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
+        # 1. Connect to Google Sheets
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+        client = gspread.authorize(creds)
+        sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
 
-    records = sheet.get_all_records()
-    
-    # ดึง ticket_id จาก Google Sheets
-    sheet_ticket_ids = [str(row['Ticket ID']) for row in records if row.get('Ticket ID')]
-    
-    # 2. Connect to PostgreSQL
-    conn = psycopg2.connect(
-        dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
-    )
-    cur = conn.cursor()
-    
-    # 3. ลบข้อมูลใน Postgres ที่ไม่มีใน Google Sheets
-    if sheet_ticket_ids:
-        # ใช้ IN กับ list ของ ticket_ids
-        cur.execute("""
-            DELETE FROM tickets 
-            WHERE ticket_id NOT IN %s
-            AND ticket_id IS NOT NULL
-        """, (tuple(sheet_ticket_ids),))
-    else:
-        # ถ้าไม่มีเหลือใน Google Sheets เลย ลบทั้งหมด
-        cur.execute("DELETE FROM tickets;")
+        records = sheet.get_all_records()
+        
+        # ดึง ticket_id จาก Google Sheets
+        sheet_ticket_ids = [str(row['Ticket ID']) for row in records if row.get('Ticket ID')]
+        
+        # 2. Connect to PostgreSQL
+        conn = psycopg2.connect(
+            dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+        )
+        cur = conn.cursor()
+        
+        # 3. ลบข้อมูลใน Postgres ที่ไม่มีใน Google Sheets
+        if sheet_ticket_ids:
+            # ใช้ IN กับ list ของ ticket_ids
+            cur.execute("""
+                DELETE FROM tickets 
+                WHERE ticket_id NOT IN %s
+                AND ticket_id IS NOT NULL
+            """, (tuple(sheet_ticket_ids),))
+        else:
+            # ถ้าไม่มีเหลือใน Google Sheets เลย ลบทั้งหมด
+            cur.execute("DELETE FROM tickets;")
 
-    # 4. Sync (insert/update) ข้อมูลใหม่
-    textbox_updates = []
-    for row in records:
-        try:
+        # 4. Sync (insert/update) ข้อมูลใหม่
+        textbox_updates = []
+        for row in records:
+            try:
+                ticket_id = str(row.get('Ticket ID', ''))
+                if not ticket_id:
+                    continue
+
+                current_textbox = None
+                # ดึงข้อมูล textbox ปัจจุบันจาก PostgreSQL
+                cur.execute("SELECT textbox FROM tickets WHERE ticket_id = %s", (ticket_id,))
+                result = cur.fetchone()
+                if result:
+                    current_textbox = result[0] if result[0] else None
+                
+                new_textbox = str(row.get('TEXTBOX', '')) if row.get('TEXTBOX') else None
+                
+                # ตรวจสอบว่า textbox มีการเปลี่ยนแปลงและไม่ว่างเปล่า
+                if new_textbox and new_textbox != current_textbox:
+                    # ถ้าเป็นข้อความจาก User (ไม่ใช่จาก Admin)
+                    if not new_textbox.startswith("Admin:"):
+                        user_name = str(row.get('ชื่อ', 'Unknown')) if row.get('ชื่อ') else 'Unknown'
+                        cur.execute("""
+                            INSERT INTO messages (
+                                ticket_id, sender_name, message, is_admin_message
+                            ) VALUES (%s, %s, %s, %s)
+                        """, (ticket_id, user_name, new_textbox, False))
+                        message = f"New message from {user_name} for ticket {ticket_id}: {new_textbox}"
+                        cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
+
+
+                cur.execute("""
+                    INSERT INTO tickets (
+                        ticket_id, user_id, email, name, phone,
+                        department, created_at, status, appointment,
+                        requested, report, type, textbox
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticket_id) DO UPDATE SET
+                        user_id = EXCLUDED.user_id,
+                        email = EXCLUDED.email,
+                        name = EXCLUDED.name,
+                        phone = EXCLUDED.phone,
+                        department = EXCLUDED.department,
+                        created_at = EXCLUDED.created_at,
+                        status = EXCLUDED.status,
+                        appointment = EXCLUDED.appointment,
+                        requested = EXCLUDED.requested,
+                        report = EXCLUDED.report,
+                        type = EXCLUDED.type,
+                        textbox = CASE 
+                            WHEN EXCLUDED.textbox != '' THEN EXCLUDED.textbox 
+                            ELSE tickets.textbox 
+                        END
+                """, (
+                    ticket_id,
+                    row.get('User ID', ''),
+                    row.get('อีเมล', ''),
+                    row.get('ชื่อ', ''),
+                    row.get('เบอร์ติดต่อ', ''),
+                    row.get('แผนก', ''),
+                    parse_datetime(row.get('วันที่แจ้ง', '')),
+                    row.get('สถานะ', ''),
+                    row.get('Appointment', ''),
+                    row.get('Requeste', ''),
+                    row.get('Report', ''),
+                    row.get('Type', ''),
+                    new_textbox
+                ))
+            except Exception as e:
+                print(f"❌ Error syncing row: {row.get('Ticket ID', 'N/A')} - {e}")
+        
+        # เพิ่ม notification สำหรับ textbox ที่อัปเดต
+        for update in textbox_updates:
+            message = f"New message from {update['name']} for ticket {update['ticket_id']}: {update['message']}"
+            cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
+
+        # เพิ่ม notification สำหรับ ticket ใหม่
+        new_tickets = []
+        for row in records:
             ticket_id = str(row.get('Ticket ID', ''))
-            if not ticket_id:
-                continue
-
-            current_textbox = None
-            # ดึงข้อมูล textbox ปัจจุบันจาก PostgreSQL
-            cur.execute("SELECT textbox FROM tickets WHERE ticket_id = %s", (ticket_id,))
-            result = cur.fetchone()
-            if result:
-                current_textbox = result[0] if result[0] else None
-            
-            new_textbox = str(row.get('TEXTBOX', '')) if row.get('TEXTBOX') else None
-            
-            # ตรวจสอบว่า textbox มีการเปลี่ยนแปลงและไม่ว่างเปล่า
-            if new_textbox and new_textbox != current_textbox:
-                # ถ้าเป็นข้อความจาก User (ไม่ใช่จาก Admin)
-                if not new_textbox.startswith("Admin:"):
-                    user_name = str(row.get('ชื่อ', 'Unknown')) if row.get('ชื่อ') else 'Unknown'
-                    cur.execute("""
-                        INSERT INTO messages (
-                            ticket_id, sender_name, message, is_admin_message
-                        ) VALUES (%s, %s, %s, %s)
-                    """, (ticket_id, user_name, new_textbox, False))
-                    message = f"New message from {user_name} for ticket {ticket_id}: {new_textbox}"
+            if ticket_id:
+                cur.execute("SELECT 1 FROM tickets WHERE ticket_id = %s", (ticket_id,))
+                if not cur.fetchone():
+                    new_tickets.append(row)
+                    message = f"New ticket created: #{ticket_id} - {row.get('ชื่อ', '')} ({row.get('แผนก', '')})"
                     cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
 
-
-            cur.execute("""
-                INSERT INTO tickets (
-                    ticket_id, user_id, email, name, phone,
-                    department, created_at, status, appointment,
-                    requested, report, type, textbox
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticket_id) DO UPDATE SET
-                    user_id = EXCLUDED.user_id,
-                    email = EXCLUDED.email,
-                    name = EXCLUDED.name,
-                    phone = EXCLUDED.phone,
-                    department = EXCLUDED.department,
-                    created_at = EXCLUDED.created_at,
-                    status = EXCLUDED.status,
-                    appointment = EXCLUDED.appointment,
-                    requested = EXCLUDED.requested,
-                    report = EXCLUDED.report,
-                    type = EXCLUDED.type,
-                    textbox = CASE 
-                        WHEN EXCLUDED.textbox != '' THEN EXCLUDED.textbox 
-                        ELSE tickets.textbox 
-                    END
-            """, (
-                ticket_id,
-                row.get('User ID', ''),
-                row.get('อีเมล', ''),
-                row.get('ชื่อ', ''),
-                row.get('เบอร์ติดต่อ', ''),
-                row.get('แผนก', ''),
-                parse_datetime(row.get('วันที่แจ้ง', '')),
-                row.get('สถานะ', ''),
-                row.get('Appointment', ''),
-                row.get('Requeste', ''),
-                row.get('Report', ''),
-                row.get('Type', ''),
-                new_textbox
-            ))
-        except Exception as e:
-            print(f"❌ Error syncing row: {row.get('Ticket ID', 'N/A')} - {e}")
-    
-    # เพิ่ม notification สำหรับ textbox ที่อัปเดต
-    for update in textbox_updates:
-        message = f"New message from {update['name']} for ticket {update['ticket_id']}: {update['message']}"
-        cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
-
-    # เพิ่ม notification สำหรับ ticket ใหม่
-    new_tickets = []
-    for row in records:
-        ticket_id = str(row.get('Ticket ID', ''))
-        if ticket_id:
-            cur.execute("SELECT 1 FROM tickets WHERE ticket_id = %s", (ticket_id,))
-            if not cur.fetchone():
-                new_tickets.append(row)
-                message = f"New ticket created: #{ticket_id} - {row.get('ชื่อ', '')} ({row.get('แผนก', '')})"
-                cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
-
-    conn.commit()
-    conn.close()
-    return new_tickets
+        conn.commit()
+        conn.close()
+        return new_tickets
 
 def add_cors_headers(f):
     @wraps(f)
@@ -546,6 +549,25 @@ def get_notifications():
     conn.close()
     return jsonify(notifications)
 
+@app.route('/test-sync')
+def test_sync():
+    try:
+        # Test database connection
+        conn = psycopg2.connect(
+            dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD,
+            host=DB_HOST, port=DB_PORT
+        )
+        conn.close()
+        
+        # Test Google Sheets connection
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+        client = gspread.authorize(creds)
+        
+        return jsonify({"status": "success", "message": "Connections tested successfully"})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 # Add a route to mark notifications as read
 @app.route('/mark-notification-read', methods=['POST'])
 def mark_notification_read():
@@ -567,6 +589,7 @@ def mark_notification_read():
 
 # Add a route to mark all notifications as read
 @app.route('/mark-all-notifications-read', methods=['POST'])
+@cross_origin()
 def mark_all_notifications_read():
     conn = psycopg2.connect(
         dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
@@ -1364,6 +1387,7 @@ def send_textbox_message(user_id, message_text):
         return False
 
 @app.route('/delete-notification', methods=['POST'])
+@cross_origin()
 def delete_notification():
     data = request.json
     notification_id = data.get('id')
@@ -1628,38 +1652,64 @@ def mark_messages_read():
     
     return jsonify({"success": True})
 
+def get_db_connection():
+    max_retries = 3
+    retry_count = 0
+    while retry_count < max_retries:
+        try:
+            conn = psycopg2.connect(
+                dbname=DB_NAME,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                host=DB_HOST,
+                port=DB_PORT
+            )
+            return conn
+        except psycopg2.OperationalError as e:
+            retry_count += 1
+            if retry_count == max_retries:
+                raise e
+            time.sleep(2)
+
 @app.route('/sync-tickets')
 def sync_route():
-    create_tickets_table()
-    new_tickets = sync_google_sheet_to_postgres()
-    # Return all tickets after sync
-    conn = psycopg2.connect(
-        dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
-    )
-    cur = conn.cursor()
-    cur.execute("""SELECT ticket_id, email, name, phone, department, created_at, status, 
-                  appointment, requested, report, type, textbox FROM tickets;""")
-    rows = cur.fetchall()
-    conn.close()
-    
-    result = [
-        {
-            "Ticket ID": row[0],
-            "อีเมล": row[1],
-            "ชื่อ": row[2],
-            "เบอร์ติดต่อ": row[3],
-            "แผนก": row[4],
-            "วันที่แจ้ง": row[5].isoformat() if row[5] else "",
-            "สถานะ": row[6],
-            "Appointment": row[7],
-            "Requeste": row[8],
-            "Report": row[9],
-            "Type": row[10],
-            "TEXTBOX": row[11]
-        }
-        for row in rows
-    ]
-    return jsonify(result)
+    try:
+        create_tickets_table()
+        new_tickets = sync_google_sheet_to_postgres()
+        
+        if new_tickets is None:
+            return jsonify({"error": "Failed to sync data"}), 500
+        
+        conn = get_db_connection()  # ใช้ function ที่มีการ retry
+        cur = conn.cursor()
+        cur.execute("""SELECT ticket_id, email, name, phone, department, 
+                      created_at, status, appointment, requested, report, 
+                      type, textbox FROM tickets;""")
+        rows = cur.fetchall()
+        conn.close()
+        
+        result = [
+            {
+                "Ticket ID": row[0],
+                "อีเมล": row[1],
+                "ชื่อ": row[2],
+                "เบอร์ติดต่อ": row[3],
+                "แผนก": row[4],
+                "วันที่แจ้ง": row[5].isoformat() if row[5] else "",
+                "สถานะ": row[6],
+                "Appointment": row[7],
+                "Requeste": row[8],
+                "Report": row[9],
+                "Type": row[10],
+                "TEXTBOX": row[11]
+            }
+            for row in rows
+        ]
+        return jsonify(result)
+        
+    except Exception as e:
+        app.logger.error(f"Error in sync-tickets: {str(e)}", exc_info=True)
+        return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
 if __name__ == '__main__':
     create_tickets_table()
