@@ -3,13 +3,28 @@ import requests
 from flask_cors import CORS 
 import psycopg2
 import gspread
+from functools import wraps
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 LINE_ACCESS_TOKEN = "0wrW85zf5NXhGWrHRjwxitrZ33JPegxtB749lq9TWRlrlCvfl0CKN9ceTw+kzPqBc6yjEOlV3EJOqUsBNhiFGQu3asN1y6CbHIAkJINhHNWi5gY9+O3+SnvrPaZzI7xbsBuBwe8XdIx33wdAN+79bgdB04t89/1O/w1cDnyilFU="
 
 app = Flask(__name__)
 
-CORS(app)
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["https://my-frontend-51dy.onrender.com"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    },
+    r"/sync-tickets": {
+        "origins": ["https://my-frontend-51dy.onrender.com"],
+        "methods": ["GET", "OPTIONS"]
+    },
+    r"/update-status": {
+        "origins": ["https://my-frontend-51dy.onrender.com"],
+        "methods": ["POST", "OPTIONS"]
+    }
+})
 
 # PostgreSQL config
 DB_NAME = 'flask_pg'
@@ -492,6 +507,20 @@ def sync_google_sheet_to_postgres():
     conn.close()
     return new_tickets
 
+def add_cors_headers(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        response = f(*args, **kwargs)
+        response.headers.add('Access-Control-Allow-Origin', 'https://my-frontend-51dy.onrender.com')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+        return response
+    return decorated_function
+
+# นำไปใช้กับ route ที่มีปัญหา
+@app.route('/api/notifications')
+@add_cors_headers
+
 @app.route('/api/notifications')
 def get_notifications():
     conn = psycopg2.connect(
@@ -639,8 +668,10 @@ def get_data():
 ]
     return jsonify(result)
 
-@app.route('/update-status', methods=['POST'])
+@app.route('/update-status', methods=['POST', 'OPTIONS'])
 def update_status():
+    if request.method == 'OPTIONS':
+        return '', 200
     data = request.json
     ticket_id = data.get("ticket_id")
     new_status = data.get("status")
