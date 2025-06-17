@@ -517,11 +517,9 @@ def add_cors_headers(f):
         return response
     return decorated_function
 
-# นำไปใช้กับ route ที่มีปัญหา
-@app.route('/api/notifications')
-@add_cors_headers
 
 @app.route('/api/notifications')
+@add_cors_headers
 def get_notifications():
     conn = psycopg2.connect(
         dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
