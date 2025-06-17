@@ -8,5 +8,4 @@ oauth2client
 google-auth
 google-auth-oauthlib
 python-dotenv
-pip install gunicorn
-pip freeze > requirements.txt
+
