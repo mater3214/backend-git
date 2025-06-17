@@ -9,25 +9,17 @@ from datetime import datetime
 LINE_ACCESS_TOKEN = "0wrW85zf5NXhGWrHRjwxitrZ33JPegxtB749lq9TWRlrlCvfl0CKN9ceTw+kzPqBc6yjEOlV3EJOqUsBNhiFGQu3asN1y6CbHIAkJINhHNWi5gY9+O3+SnvrPaZzI7xbsBuBwe8XdIx33wdAN+79bgdB04t89/1O/w1cDnyilFU="
 import time
 app = Flask(__name__)
-
 CORS(app, resources={
-    r"/api/*": {
-        "origins": ["https://my-frontend-51dy.onrender.com"],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"],
-        "supports_credentials": True
-    },
-    r"/sync-tickets": {
-        "origins": ["https://my-frontend-51dy.onrender.com"],
-        "methods": ["GET", "OPTIONS"],
-        "supports_credentials": True
-    },
-    r"/update-status": {
-        "origins": ["https://my-frontend-51dy.onrender.com"],
-        "methods": ["POST", "OPTIONS"],
-        "supports_credentials": True
-    }
+    r"/api/*": {"origins": "*"},
+    r"/sync-tickets": {"origins": "*"},
+    r"/update-status": {"origins": "*"},
+    r"/clear-textboxes": {"origins": "*"},
+    r"/delete-ticket": {"origins": "*"},
+    r"/update-textbox": {"origins": "*"}
 })
+
+CORS(app)
+
 
 # PostgreSQL config
 DB_NAME = 'flask_pg'
@@ -569,6 +561,7 @@ def get_notifications():
     return jsonify(notifications)
 
 @app.route('/test-sync')
+@cross_origin()
 def test_sync():
     try:
         # Test database connection
@@ -589,6 +582,7 @@ def test_sync():
 
 # Add a route to mark notifications as read
 @app.route('/mark-notification-read', methods=['POST'])
+@cross_origin()
 def mark_notification_read():
     data = request.json
     notification_id = data.get('id')
@@ -703,6 +697,7 @@ def parse_datetime(date_str):
         return None
   
 @app.route('/api/data')
+@cross_origin()
 def get_data():
     conn = psycopg2.connect(
     dbname=DB_NAME,
@@ -734,6 +729,7 @@ def get_data():
     return jsonify(result)
 
 @app.route('/update-status', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def update_status():
     if request.method == 'OPTIONS':
         return '', 200
@@ -825,6 +821,7 @@ def update_status():
 
 
 @app.route('/delete-ticket', methods=['POST'])
+@cross_origin()
 def delete_ticket():
     data = request.json
     ticket_id = data.get('ticket_id')
@@ -887,6 +884,7 @@ def delete_ticket():
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/messages/delete', methods=['POST'])
+@cross_origin()
 def delete_messages():
     data = request.json
     ticket_id = data.get('ticket_id')
@@ -916,6 +914,7 @@ def delete_messages():
             conn.close()
 
 @app.route('/auto-clear-textbox', methods=['POST'])
+@cross_origin()
 def auto_clear_textbox():
     data = request.json
     ticket_id = data.get('ticket_id')
@@ -960,13 +959,16 @@ def auto_clear_textbox():
         if 'conn' in locals():
             conn.close()
 
-@app.route('/clear-textboxes', methods=['POST'])
+@app.route('/clear-textboxes', methods=['POST', 'OPTIONS'])
+@cross_origin()  # เพิ่ม decorator นี้
 def clear_textboxes():
+    if request.method == 'OPTIONS':
+        return '', 200  # ตอบกลับ preflight request
+    
     try:
-        # เชื่อมต่อกับฐานข้อมูล
         conn = psycopg2.connect(
-            dbname=DB_NAME, user=DB_USER, 
-            password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+            dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, 
+            host=DB_HOST, port=DB_PORT
         )
         cur = conn.cursor()
 
@@ -985,31 +987,37 @@ def clear_textboxes():
         """)
 
         # 3. อัปเดต Google Sheets
-        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        scope = ['https://spreadsheets.google.com/feed', 'https://www.googleapis.com/auth/drive']
         creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
         client = gspread.authorize(creds)
-        sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
-
-        headers = sheet.row_values(1)
-        if "TEXTBOX" in headers:
-            textbox_col = headers.index("TEXTBOX") + 1
+        
+        try:
+            sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
+            headers = sheet.row_values(1)
             
-            for ticket in tickets_with_textbox:
-                ticket_id = ticket[0]
-                try:
-                    cell = sheet.find(ticket_id)
-                    if cell:
-                        sheet.update_cell(cell.row, textbox_col, '')
-                except gspread.exceptions.CellNotFound:
-                    continue
+            if "TEXTBOX" in headers:
+                textbox_col = headers.index("TEXTBOX") + 1
+                
+                for ticket in tickets_with_textbox:
+                    ticket_id = ticket[0]
+                    try:
+                        cell = sheet.find(ticket_id)
+                        if cell:
+                            sheet.update_cell(cell.row, textbox_col, '')
+                    except gspread.exceptions.CellNotFound:
+                        continue
 
-        conn.commit()
-        return jsonify({
-            "success": True,
-            "cleared_count": len(tickets_with_textbox),
-            "message": f"Cleared {len(tickets_with_textbox)} textboxes"
-        })
-
+            conn.commit()
+            return jsonify({
+                "success": True,
+                "cleared_count": len(tickets_with_textbox),
+                "message": f"Cleared {len(tickets_with_textbox)} textboxes"
+            })
+            
+        except Exception as e:
+            conn.rollback()
+            return jsonify({"error": f"Google Sheets error: {str(e)}"}), 500
+            
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
@@ -1018,6 +1026,7 @@ def clear_textboxes():
             
 
 @app.route('/refresh-messages', methods=['POST'])
+@cross_origin()
 def refresh_messages():
     data = request.json
     ticket_id = data.get('ticket_id')
@@ -1075,6 +1084,7 @@ def refresh_messages():
             conn.close()
 
 @app.route('/update-textbox', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def update_textbox():
     if request.method == 'OPTIONS':
         return '', 200
@@ -1143,6 +1153,7 @@ def update_textbox():
         return jsonify({"error": f"Google Sheets error: {str(e)}"}), 500
 
 @app.route('/api/email-rankings')
+@cross_origin()
 def get_email_rankings():
     try:
         conn = psycopg2.connect(
@@ -1450,6 +1461,7 @@ def delete_notification():
     return jsonify({"success": True})
 
 @app.route('/api/data-by-date', methods=['GET'])
+@cross_origin()
 def get_data_by_date():
     date_str = request.args.get('date')
     
@@ -1659,6 +1671,7 @@ def add_message():
             conn.close()
 
 @app.route('/test-sheets')
+@cross_origin()
 def test_sheets():
     try:
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
@@ -1710,8 +1723,7 @@ def mark_messages_read():
     
     return jsonify({"success": True})
 
-def get_db_connection():
-    max_retries = 3
+def get_db_connection(max_retries=3, retry_delay=2):
     retry_count = 0
     while retry_count < max_retries:
         try:
@@ -1727,9 +1739,10 @@ def get_db_connection():
             retry_count += 1
             if retry_count == max_retries:
                 raise e
-            time.sleep(2)
+            time.sleep(retry_delay)
 
 @app.route('/sync-tickets')
+@cross_origin()
 def sync_route():
     try:
         create_tickets_table()
