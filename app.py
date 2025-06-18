@@ -1,3 +1,4 @@
+import os  # เพิ่มบรรทัดนี้
 from flask import Flask, jsonify, request
 import requests
 from flask_cors import CORS 
@@ -415,11 +416,11 @@ def sync_google_sheet_to_postgres():
         client = gspread.authorize(creds)
         
         # เปิด Sheet และ Worksheet
-        sheet = client.open('Tickets').worksheet('sheet1')
+        sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
         records = sheet.get_all_records()
         
         # ดึง ticket_ids จาก Google Sheets
-        sheet_ticket_ids = [str(row['Ticket ID']) for row in records if row.get('Ticket ID')]
+        sheet_ticket_ids = [str(row.get('Ticket ID', '')) for row in records if row.get('Ticket ID')]
         
         # 2. Connect to PostgreSQL
         conn = psycopg2.connect(
@@ -444,34 +445,11 @@ def sync_google_sheet_to_postgres():
             cur.execute("DELETE FROM tickets;")
 
         # 4. Sync (insert/update) ข้อมูลใหม่
-        textbox_updates = []
         for row in records:
             try:
                 ticket_id = str(row.get('Ticket ID', ''))
                 if not ticket_id:
                     continue
-
-                current_textbox = None
-                # ดึงข้อมูล textbox ปัจจุบันจาก PostgreSQL
-                cur.execute("SELECT textbox FROM tickets WHERE ticket_id = %s", (ticket_id,))
-                result = cur.fetchone()
-                if result:
-                    current_textbox = result[0] if result[0] else None
-                
-                new_textbox = str(row.get('TEXTBOX', '')) if row.get('TEXTBOX') else None
-                
-                # ตรวจสอบว่า textbox มีการเปลี่ยนแปลงและไม่ว่างเปล่า
-                if new_textbox and new_textbox != current_textbox:
-                    # ถ้าเป็นข้อความจาก User (ไม่ใช่จาก Admin)
-                    if not new_textbox.startswith("Admin:"):
-                        user_name = str(row.get('ชื่อ', 'Unknown')) if row.get('ชื่อ') else 'Unknown'
-                        cur.execute("""
-                            INSERT INTO messages (
-                                ticket_id, sender_name, message, is_admin_message
-                            ) VALUES (%s, %s, %s, %s)
-                        """, (ticket_id, user_name, new_textbox, False))
-                        message = f"New message from {user_name} for ticket {ticket_id}: {new_textbox}"
-                        cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
 
                 # อัปเดตหรือเพิ่มข้อมูล ticket
                 cur.execute("""
@@ -492,10 +470,7 @@ def sync_google_sheet_to_postgres():
                         requested = EXCLUDED.requested,
                         report = EXCLUDED.report,
                         type = EXCLUDED.type,
-                        textbox = CASE 
-                            WHEN EXCLUDED.textbox != '' THEN EXCLUDED.textbox 
-                            ELSE tickets.textbox 
-                        END
+                        textbox = EXCLUDED.textbox
                 """, (
                     ticket_id,
                     row.get('User ID', ''),
@@ -509,7 +484,7 @@ def sync_google_sheet_to_postgres():
                     row.get('Requeste', ''),
                     row.get('Report', ''),
                     row.get('Type', ''),
-                    new_textbox
+                    row.get('TEXTBOX', '')
                 ))
 
                 # ตรวจสอบว่าเป็น ticket ใหม่หรือไม่
@@ -527,12 +502,6 @@ def sync_google_sheet_to_postgres():
         conn.commit()
         print(f"✅ Synced {len(records)} rows from Google Sheets")
         
-    except gspread.exceptions.APIError as e:
-        print(f"❌ Google Sheets API Error: {str(e)}")
-        return []
-    except psycopg2.Error as e:
-        print(f"❌ PostgreSQL Error: {str(e)}")
-        return []
     except Exception as e:
         print(f"❌ Unexpected error in sync_google_sheet_to_postgres: {str(e)}")
         return []
@@ -1007,7 +976,6 @@ def auto_clear_textbox():
 @app.route('/clear-textboxes', methods=['POST'])
 def clear_textboxes():
     try:
-        # เชื่อมต่อกับฐานข้อมูล
         conn = psycopg2.connect(
             dbname=DB_NAME, user=DB_USER, 
             password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
@@ -1016,10 +984,10 @@ def clear_textboxes():
 
         # 1. ค้นหา tickets ที่มี textbox ไม่ว่าง
         cur.execute("""
-            SELECT ticket_id, textbox FROM tickets 
+            SELECT ticket_id FROM tickets 
             WHERE textbox IS NOT NULL AND textbox != ''
         """)
-        tickets_with_textbox = cur.fetchall()
+        tickets_with_textbox = [row[0] for row in cur.fetchall()]
 
         # 2. ลบ textbox ใน PostgreSQL
         cur.execute("""
@@ -1030,7 +998,18 @@ def clear_textboxes():
 
         # 3. อัปเดต Google Sheets
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+        
+        # ตรวจสอบว่าไฟล์ credentials.json มีอยู่
+        if not os.path.exists('credentials.json'):
+            print("❌ credentials.json not found, skipping Google Sheets update")
+            conn.commit()
+            return jsonify({
+                "success": True,
+                "cleared_count": len(tickets_with_textbox),
+                "message": f"Cleared {len(tickets_with_textbox)} textboxes in database only"
+            })
+            
+        creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
         client = gspread.authorize(creds)
         sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
 
@@ -1038,8 +1017,7 @@ def clear_textboxes():
         if "TEXTBOX" in headers:
             textbox_col = headers.index("TEXTBOX") + 1
             
-            for ticket in tickets_with_textbox:
-                ticket_id = ticket[0]
+            for ticket_id in tickets_with_textbox:
                 try:
                     cell = sheet.find(ticket_id)
                     if cell:
@@ -1055,6 +1033,9 @@ def clear_textboxes():
         })
 
     except Exception as e:
+        print(f"Error in clear_textboxes: {str(e)}")
+        if 'conn' in locals():
+            conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         if 'conn' in locals():
