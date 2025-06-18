@@ -104,374 +104,411 @@ def send_textbox_message(user_id, message_text):
 
 def notify_user(payload):
     try:
+        # Check if user_id exists and LINE_ACCESS_TOKEN is configured
+        if not payload.get('user_id') or not LINE_ACCESS_TOKEN:
+            print("LINE notification skipped - missing user_id or access token")
+            return False
+
         url = "https://api.line.me/v2/bot/message/push"
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"
         }
 
-        # Prepare LINE message payload
-        message = {
-            "to": payload['user_id'],
-            "messages": [
-                {
-                    "type": "flex",
-                    "altText": "Ticket Status Update",
-                    "contents": {
-                        "type": "bubble",
-                        "body": {
-                            "type": "box",
-                            "layout": "vertical",
-                            "contents": [
-                                {
-                                    "type": "text",
-                                    "text": "📢 Ticket Status Update",
-                                    "weight": "bold",
-                                    "size": "lg",
-                                    "color": "#005BBB"
-                                },
-                                {
-                                    "type": "separator",
-                                    "margin": "md"
-                                },
-                                {
-                                    "type": "text",
-                                    "text": f"Ticket ID: {payload.get('ticket_id', 'N/A')}",
-                                    "margin": "md"
-                                },
-                                {
-                                    "type": "text",
-                                    "text": f"Status: {payload.get('status', 'N/A')}",
-                                    "margin": "sm"
-                                },
-                                {
-                                    "type": "text",
-                                    "text": f"Updated at: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                                    "margin": "sm",
-                                    "size": "sm",
-                                    "color": "#666666"
-                                }
-                            ]
+        # Format appointment date if exists
+        appointment_date = '-'
+        if payload.get('appointment'):
+            try:
+                dt = datetime.strptime(payload['appointment'], '%Y-%m-%d %H:%M:%S')
+                appointment_date = dt.strftime('%d/%m/%Y %H:%M')
+            except ValueError:
+                appointment_date = payload['appointment']
+
+        # Create flex message
+        flex_message = {
+            "type": "flex",
+            "altText": "Ticket Status Update",
+            "contents": {
+                "type": "bubble",
+                "body": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "📢 Ticket Status Update",
+                            "weight": "bold",
+                            "size": "lg",
+                            "color": "#005BBB"
+                        },
+                        {
+                            "type": "separator",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "text",
+                            "text": f"Ticket ID: {payload.get('ticket_id', 'N/A')}",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "text",
+                            "text": f"Status: {payload.get('status', 'N/A')}",
+                            "margin": "sm"
+                        },
+                        {
+                            "type": "text",
+                            "text": f"Updated at: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                            "margin": "sm",
+                            "size": "sm",
+                            "color": "#666666"
+                        },
+                        {
+                            "type": "text",
+                            "text": f"Appointment: {appointment_date}",
+                            "margin": "sm",
+                            "size": "sm"
                         }
-                    }
+                    ]
                 }
-            ]
+            }
         }
 
-        response = requests.post(url, headers=headers, json=message)
+        # Prepare payload
+        message = {
+            "to": payload['user_id'],
+            "messages": [flex_message]
+        }
+
+        response = requests.post(url, headers=headers, json=message, timeout=10)
         
         if response.status_code != 200:
             print(f"LINE API Error: {response.status_code} - {response.text}")
             return False
             
+        print(f"Notification sent to user {payload['user_id']}")
         return True
         
+    except requests.exceptions.RequestException as e:
+        print(f"Request error in notify_user: {str(e)}")
+        return False
     except Exception as e:
-        print(f"Error in notify_user: {str(e)}")
+        print(f"Unexpected error in notify_user: {str(e)}")
         return False
 
 
 
 def create_flex_message(payload):
-    appointment_date = '-'
-    if payload.get('appointment'):
-        try:
-            dt = datetime.strptime(payload['appointment'], '%Y-%m-%d %H:%M:%S')
-            appointment_date = dt.strftime('%d/%m/%Y %H:%M')
-        except:
-            appointment_date = payload['appointment']
-    status = payload.get('status', 'ไม่ระบุ')
-    status_color = {
-        'Pending': '#FF9900',
-        'Completed': '#00AA00',
-        'Rejected': '#FF0000',
-        'In Progress': '#0066FF'
-    }.get(status, '#666666')
+    try:
+        appointment_date = '-'
+        if payload.get('appointment'):
+            try:
+                dt = datetime.strptime(payload['appointment'], '%Y-%m-%d %H:%M:%S')
+                appointment_date = dt.strftime('%d/%m/%Y %H:%M')
+            except ValueError:
+                appointment_date = payload['appointment']
+        
+        status = payload.get('status', 'ไม่ระบุ')
+        status_color = {
+            'Pending': '#FF9900',
+            'Completed': '#00AA00',
+            'Rejected': '#FF0000',
+            'In Progress': '#0066FF',
+            'Waiting': '#8b5cf6'
+        }.get(status, '#666666')
 
-    return {
-        "type": "flex",
-        "altText": "อัปเดตสถานะ Ticket ของคุณ",
-        "contents": {
-            "type": "bubble",
-            "size": "giga",
-            "header": {
-                "type": "box",
-                "layout": "vertical",
-                "contents": [
-                    {
-                        "type": "text",
-                        "text": "📢 อัปเดตสถานะ Ticket",
-                        "weight": "bold",
-                        "size": "lg",
-                        "color": "#FFFFFF",
-                        "align": "center"
-                    }
-                ],
-                "backgroundColor": "#005BBB",
-                "paddingAll": "20px"
-            },
-            "body": {
-                "type": "box",
-                "layout": "vertical",
-                "contents": [
-                    {
-                        "type": "box",
-                        "layout": "horizontal",
-                        "contents": [
-                            {
-                                "type": "text",
-                                "text": "หมายเลข",
-                                "weight": "bold",
-                                "size": "sm",
-                                "flex": 2,
-                                "color": "#666666"
-                            },
-                            {
-                                "type": "text",
-                                "text": payload.get('ticket_id', ''),
-                                "size": "sm",
-                                "flex": 4,
-                                "align": "end"
-                            }
-                        ],
-                        "spacing": "sm",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "separator",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "box",
-                        "layout": "horizontal",
-                        "contents": [
-                            {
-                                "type": "text",
-                                "text": "ชื่อ",
-                                "weight": "bold",
-                                "size": "sm",
-                                "flex": 2,
-                                "color": "#666666"
-                            },
-                            {
-                                "type": "text",
-                                "text": payload.get('name', ''),
-                                "size": "sm",
-                                "flex": 4,
-                                "align": "end"
-                            }
-                        ],
-                        "spacing": "sm",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "separator",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "box",
-                        "layout": "horizontal",
-                        "contents": [
-                            {
-                                "type": "text",
-                                "text": "แผนก",
-                                "weight": "bold",
-                                "size": "sm",
-                                "flex": 2,
-                                "color": "#666666"
-                            },
-                            {
-                                "type": "text",
-                                "text": payload.get('department', ''),
-                                "size": "sm",
-                                "flex": 4,
-                                "align": "end"
-                            }
-                        ],
-                        "spacing": "sm",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "separator",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "box",
-                        "layout": "horizontal",
-                        "contents": [
-                            {
-                                "type": "text",
-                                "text": "เบอร์ติดต่อ",
-                                "weight": "bold",
-                                "size": "sm",
-                                "flex": 2,
-                                "color": "#666666"
-                            },
-                            {
-                                "type": "text",
-                                "text": payload.get('phone', ''),
-                                "size": "sm",
-                                "flex": 4,
-                                "align": "end"
-                            }
-                        ],
-                        "spacing": "sm",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "separator",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "box",
-                        "layout": "horizontal",
-                        "contents": [
-                            {
-                                "type": "text",
-                                "text": "Type",
-                                "weight": "bold",
-                                "size": "sm",
-                                "flex": 2,
-                                "color": "#666666"
-                            },
-                            {
-                                "type": "text",
-                                "text": payload.get('type', ''),
-                                "size": "sm",
-                                "flex": 4,
-                                "align": "end"
-                            }
-                        ],
-                        "spacing": "sm",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "separator",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "box",
-                        "layout": "horizontal",
-                        "contents": [
-                            {
-                                "type": "text",
-                                "text": "ปัญหา",
-                                "weight": "bold",
-                                "size": "sm",
-                                "flex": 2,
-                                "color": "#666666"
-                            },
-                            {
-                                "type": "text",
-                                "text": payload.get('report', 'ไม่มีข้อมูล'),
-                                "size": "sm",
-                                "flex": 4,
-                                "align": "end",
-                                "wrap": True
-                            }
-                        ],
-                        "spacing": "sm",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "separator",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "box",
-                        "layout": "horizontal",
-                        "contents": [
-                            {
-                                "type": "text",
-                                "text": "วันที่นัดหมาย",
-                                "weight": "bold",
-                                "size": "sm",
-                                "flex": 2,
-                                "color": "#666666"
-                            },
-                            {
-                                "type": "text",
-                                "text": appointment_date,
-                                "size": "sm",
-                                "flex": 4,
-                                "align": "end"
-                            }
-                        ],
-                        "spacing": "sm",
-                        "margin": "md"
-                    },
-                    {
-                        "type": "box",
-                        "layout": "vertical",
-                        "contents": [
-                            {
-                                "type": "text",
-                                "text": "สถานะล่าสุด",
-                                "weight": "bold",
-                                "size": "sm",
-                                "color": "#666666",
-                                "margin": "md"
-                            },
-                            {
-                                "type": "text",
-                                "text": status,
-                                "weight": "bold",
-                                "size": "xl",
-                                "color": status_color,
-                                "align": "center",
-                                "margin": "sm"
-                            }
-                        ],
-                        "backgroundColor": "#F5F5F5",
-                        "cornerRadius": "md",
-                        "margin": "xl",
-                        "paddingAll": "md"
-                    }
-                ],
-                "spacing": "md",
-                "paddingAll": "20px"
-            },
-            "footer": {
-                "type": "box",
-                "layout": "vertical",
-                "contents": [
-                    {
-                        "type": "text",
-                        "text": "ขอบคุณที่ใช้บริการของเรา",
-                        "size": "xs",
-                        "color": "#888888",
-                        "align": "center"
-                    }
-                ],
-                "paddingAll": "10px"
+        return {
+            "type": "flex",
+            "altText": "อัปเดตสถานะ Ticket ของคุณ",
+            "contents": {
+                "type": "bubble",
+                "size": "giga",
+                "header": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "📢 อัปเดตสถานะ Ticket",
+                            "weight": "bold",
+                            "size": "lg",
+                            "color": "#FFFFFF",
+                            "align": "center"
+                        }
+                    ],
+                    "backgroundColor": "#005BBB",
+                    "paddingAll": "20px"
+                },
+                "body": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "หมายเลข",
+                                    "weight": "bold",
+                                    "size": "sm",
+                                    "flex": 2,
+                                    "color": "#666666"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": payload.get('ticket_id', ''),
+                                    "size": "sm",
+                                    "flex": 4,
+                                    "align": "end"
+                                }
+                            ],
+                            "spacing": "sm",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "separator",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "ชื่อ",
+                                    "weight": "bold",
+                                    "size": "sm",
+                                    "flex": 2,
+                                    "color": "#666666"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": payload.get('name', ''),
+                                    "size": "sm",
+                                    "flex": 4,
+                                    "align": "end"
+                                }
+                            ],
+                            "spacing": "sm",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "separator",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "แผนก",
+                                    "weight": "bold",
+                                    "size": "sm",
+                                    "flex": 2,
+                                    "color": "#666666"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": payload.get('department', ''),
+                                    "size": "sm",
+                                    "flex": 4,
+                                    "align": "end"
+                                }
+                            ],
+                            "spacing": "sm",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "separator",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "เบอร์ติดต่อ",
+                                    "weight": "bold",
+                                    "size": "sm",
+                                    "flex": 2,
+                                    "color": "#666666"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": payload.get('phone', ''),
+                                    "size": "sm",
+                                    "flex": 4,
+                                    "align": "end"
+                                }
+                            ],
+                            "spacing": "sm",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "separator",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "Type",
+                                    "weight": "bold",
+                                    "size": "sm",
+                                    "flex": 2,
+                                    "color": "#666666"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": payload.get('type', ''),
+                                    "size": "sm",
+                                    "flex": 4,
+                                    "align": "end"
+                                }
+                            ],
+                            "spacing": "sm",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "separator",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "ปัญหา",
+                                    "weight": "bold",
+                                    "size": "sm",
+                                    "flex": 2,
+                                    "color": "#666666"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": payload.get('report', 'ไม่มีข้อมูล'),
+                                    "size": "sm",
+                                    "flex": 4,
+                                    "align": "end",
+                                    "wrap": True
+                                }
+                            ],
+                            "spacing": "sm",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "separator",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "box",
+                            "layout": "horizontal",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "วันที่นัดหมาย",
+                                    "weight": "bold",
+                                    "size": "sm",
+                                    "flex": 2,
+                                    "color": "#666666"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": appointment_date,
+                                    "size": "sm",
+                                    "flex": 4,
+                                    "align": "end"
+                                }
+                            ],
+                            "spacing": "sm",
+                            "margin": "md"
+                        },
+                        {
+                            "type": "box",
+                            "layout": "vertical",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "สถานะล่าสุด",
+                                    "weight": "bold",
+                                    "size": "sm",
+                                    "color": "#666666",
+                                    "margin": "md"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": status,
+                                    "weight": "bold",
+                                    "size": "xl",
+                                    "color": status_color,
+                                    "align": "center",
+                                    "margin": "sm"
+                                }
+                            ],
+                            "backgroundColor": "#F5F5F5",
+                            "cornerRadius": "md",
+                            "margin": "xl",
+                            "paddingAll": "md"
+                        }
+                    ],
+                    "spacing": "md",
+                    "paddingAll": "20px"
+                },
+                "footer": {
+                    "type": "box",
+                    "layout": "vertical",
+                    "contents": [
+                        {
+                            "type": "text",
+                            "text": "ขอบคุณที่ใช้บริการของเรา",
+                            "size": "xs",
+                            "color": "#888888",
+                            "align": "center"
+                        }
+                    ],
+                    "paddingAll": "10px"
+                }
             }
         }
-    }
+    except Exception as e:
+        print(f"Error creating flex message: {str(e)}")
+        return None
 
 
 def sync_google_sheet_to_postgres():
     new_tickets = []
     
     try:
-        # 1. Connect to Google Sheets
-        scope = ['https://spreadsheets.google.com/feeds', 
-                'https://www.googleapis.com/auth/drive']
-        
-        # ตรวจสอบว่าไฟล์ credentials.json มีอยู่
+        # 1. Connect to Google Sheets only if credentials exist
         if not os.path.exists('credentials.json'):
             print("❌ credentials.json not found, skipping Google Sheets sync")
             return []
             
+        scope = ['https://spreadsheets.google.com/feeds', 
+                'https://www.googleapis.com/auth/drive']
         creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
         client = gspread.authorize(creds)
         
-        # เปิด Sheet และ Worksheet
-        sheet = client.open('Tickets').worksheet('sheet1')
-        records = sheet.get_all_records()
+        # Open Sheet and Worksheet with error handling
+        try:
+            sheet = client.open('Tickets').worksheet('sheet1')
+            records = sheet.get_all_records()
+        except gspread.exceptions.SpreadsheetNotFound:
+            print("❌ Google Sheet 'Tickets' not found")
+            return []
+        except gspread.exceptions.WorksheetNotFound:
+            print("❌ Worksheet 'sheet1' not found")
+            return []
         
-        # ดึง ticket_ids จาก Google Sheets
-        sheet_ticket_ids = [str(row['Ticket ID']) for row in records if row.get('Ticket ID')]
-        
+        if not records:
+            print("⚠️ No data found in Google Sheet")
+            return []
+            
         # 2. Connect to PostgreSQL
         conn = psycopg2.connect(
             dbname=DB_NAME,
@@ -482,38 +519,27 @@ def sync_google_sheet_to_postgres():
         )
         cur = conn.cursor()
         
-        # 3. ลบข้อมูลใน Postgres ที่ไม่มีใน Google Sheets
-        if sheet_ticket_ids:
-            # ใช้ IN กับ list ของ ticket_ids
-            cur.execute("""
-                DELETE FROM tickets 
-                WHERE ticket_id NOT IN %s
-                AND ticket_id IS NOT NULL
-            """, (tuple(sheet_ticket_ids),))
-        else:
-            # ถ้าไม่มีข้อมูลใน Google Sheets เลย ให้ลบทั้งหมด
-            cur.execute("DELETE FROM tickets;")
-
-        # 4. Sync (insert/update) ข้อมูลใหม่
-        textbox_updates = []
+        # 3. Get existing ticket IDs from PostgreSQL for comparison
+        cur.execute("SELECT ticket_id FROM tickets")
+        existing_tickets = {row[0] for row in cur.fetchall()}
+        
+        # 4. Process each row from Google Sheets
         for row in records:
             try:
                 ticket_id = str(row.get('Ticket ID', ''))
                 if not ticket_id:
                     continue
 
-                current_textbox = None
-                # ดึงข้อมูล textbox ปัจจุบันจาก PostgreSQL
+                # Get current textbox value from PostgreSQL
                 cur.execute("SELECT textbox FROM tickets WHERE ticket_id = %s", (ticket_id,))
-                result = cur.fetchone()
-                if result:
-                    current_textbox = result[0] if result[0] else None
+                current_textbox = cur.fetchone()
+                current_textbox = current_textbox[0] if current_textbox else None
                 
                 new_textbox = str(row.get('TEXTBOX', '')) if row.get('TEXTBOX') else None
                 
-                # ตรวจสอบว่า textbox มีการเปลี่ยนแปลงและไม่ว่างเปล่า
+                # Check if textbox has changed and is not empty
                 if new_textbox and new_textbox != current_textbox:
-                    # ถ้าเป็นข้อความจาก User (ไม่ใช่จาก Admin)
+                    # If message is from User (not Admin)
                     if not new_textbox.startswith("Admin:"):
                         user_name = str(row.get('ชื่อ', 'Unknown')) if row.get('ชื่อ') else 'Unknown'
                         cur.execute("""
@@ -521,16 +547,35 @@ def sync_google_sheet_to_postgres():
                                 ticket_id, sender_name, message, is_admin_message
                             ) VALUES (%s, %s, %s, %s)
                         """, (ticket_id, user_name, new_textbox, False))
-                        message = f"New message from {user_name} for ticket {ticket_id}: {new_textbox}"
-                        cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
+                        
+                        # Create notification
+                        notification_msg = f"New message from {user_name} for ticket {ticket_id}: {new_textbox}"
+                        cur.execute("INSERT INTO notifications (message) VALUES (%s)", (notification_msg,))
 
-                # อัปเดตหรือเพิ่มข้อมูล ticket
+                # Prepare data for upsert
+                ticket_data = (
+                    ticket_id,
+                    row.get('User ID', ''),
+                    row.get('อีเมล', ''),
+                    row.get('ชื่อ', ''),
+                    row.get('เบอร์ติดต่อ', ''),
+                    row.get('แผนก', ''),
+                    parse_datetime(row.get('วันที่แจ้ง', '')),
+                    row.get('สถานะ', ''),
+                    row.get('Appointment', ''),
+                    row.get('Requeste', ''),
+                    row.get('Report', ''),
+                    row.get('Type', ''),
+                    new_textbox
+                )
+
+                # Upsert ticket data
                 cur.execute("""
                     INSERT INTO tickets (
                         ticket_id, user_id, email, name, phone,
                         department, created_at, status, appointment,
                         requested, report, type, textbox
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (ticket_id) DO UPDATE SET
                         user_id = EXCLUDED.user_id,
                         email = EXCLUDED.email,
@@ -547,25 +592,10 @@ def sync_google_sheet_to_postgres():
                             WHEN EXCLUDED.textbox != '' THEN EXCLUDED.textbox 
                             ELSE tickets.textbox 
                         END
-                """, (
-                    ticket_id,
-                    row.get('User ID', ''),
-                    row.get('อีเมล', ''),
-                    row.get('ชื่อ', ''),
-                    row.get('เบอร์ติดต่อ', ''),
-                    row.get('แผนก', ''),
-                    parse_datetime(row.get('วันที่แจ้ง', '')),
-                    row.get('สถานะ', ''),
-                    row.get('Appointment', ''),
-                    row.get('Requeste', ''),
-                    row.get('Report', ''),
-                    row.get('Type', ''),
-                    new_textbox
-                ))
+                """, ticket_data)
 
-                # ตรวจสอบว่าเป็น ticket ใหม่หรือไม่
-                cur.execute("SELECT 1 FROM tickets WHERE ticket_id = %s", (ticket_id,))
-                if not cur.fetchone():
+                # Check if this is a new ticket
+                if ticket_id not in existing_tickets:
                     new_tickets.append(row)
                     message = f"New ticket created: #{ticket_id} - {row.get('ชื่อ', '')} ({row.get('แผนก', '')})"
                     cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
@@ -594,28 +624,37 @@ def sync_google_sheet_to_postgres():
     return new_tickets
 
 def parse_datetime(date_str):
-    """Helper function to parse datetime from string"""
-    try:
-        if not date_str:
-            return None
-            
-        # ลองรูปแบบต่างๆ ที่อาจพบ
-        formats = [
-            '%Y-%m-%d %H:%M:%S',
-            '%Y-%m-%d',
-            '%d/%m/%Y %H:%M',
-            '%d/%m/%Y'
-        ]
+    """Helper function to parse datetime from string with multiple format support"""
+    if not date_str:
+        return None
         
-        for fmt in formats:
-            try:
-                return datetime.strptime(date_str, fmt)
-            except ValueError:
-                continue
-                
-        return None
-    except Exception:
-        return None
+    # Try multiple datetime formats
+    formats = [
+        '%Y-%m-%d %H:%M:%S',  # 2023-01-01 12:34:56
+        '%Y-%m-%d',            # 2023-01-01
+        '%d/%m/%Y %H:%M',      # 01/01/2023 12:34
+        '%d/%m/%Y',            # 01/01/2023
+        '%m/%d/%Y %H:%M:%S',   # 01/01/2023 12:34:56 (US format)
+        '%m/%d/%Y %H:%M',      # 01/01/2023 12:34 (US format)
+        '%m/%d/%Y',            # 01/01/2023 (US format)
+        '%Y/%m/%d %H:%M:%S',   # 2023/01/01 12:34:56
+        '%Y/%m/%d %H:%M',      # 2023/01/01 12:34
+        '%Y/%m/%d',            # 2023/01/01
+        '%d-%m-%Y %H:%M:%S',   # 01-01-2023 12:34:56
+        '%d-%m-%Y %H:%M',      # 01-01-2023 12:34
+        '%d-%m-%Y',            # 01-01-2023
+        '%Y%m%d%H%M%S',        # 20230101123456 (compact format)
+        '%Y%m%d'               # 20230101 (compact format)
+    ]
+    
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            continue
+            
+    print(f"⚠️ Could not parse date string: {date_str}")
+    return None
 
 @app.route('/api/notifications', methods=['GET'])
 def get_notifications():
@@ -839,83 +878,106 @@ def update_status():
     if not ticket_id or not new_status:
         return jsonify({"error": "ticket_id and status required"}), 400
 
+    conn = None
     try:
         # 1. Update PostgreSQL
         conn = psycopg2.connect(
-            dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
+            dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, 
+            host=DB_HOST, port=DB_PORT
         )
         cur = conn.cursor()
 
-        # Get current status
-        cur.execute("SELECT status FROM tickets WHERE ticket_id = %s", (ticket_id,))
-        result = cur.fetchone()
+        # Get current status and user info
+        cur.execute("""
+            SELECT status, user_id, name, email, phone, department, 
+                   created_at, appointment, requested, report, type, textbox 
+            FROM tickets WHERE ticket_id = %s
+        """, (ticket_id,))
         
+        result = cur.fetchone()
         if not result:
-            conn.close()
             return jsonify({"error": "Ticket not found"}), 404
             
         current_status = result[0]
+        ticket_data = {
+            'ticket_id': ticket_id,
+            'user_id': result[1],
+            'name': result[2],
+            'email': result[3],
+            'phone': result[4],
+            'department': result[5],
+            'created_at': result[6],
+            'appointment': result[7],
+            'requested': result[8],
+            'report': result[9],
+            'type': result[10],
+            'textbox': result[11]
+        }
 
         # Only proceed if status is actually changing
         if current_status != new_status:
-            # Update status
-            cur.execute("UPDATE tickets SET status = %s WHERE ticket_id = %s", (new_status, ticket_id))
+            # Update status in database
+            cur.execute("""
+                UPDATE tickets SET status = %s 
+                WHERE ticket_id = %s
+                RETURNING status
+            """, (new_status, ticket_id))
             
-            # Get ticket details for notification
-            cur.execute("SELECT name, email FROM tickets WHERE ticket_id = %s", (ticket_id,))
-            ticket = cur.fetchone()
+            updated_status = cur.fetchone()[0]
             
-            if ticket:
-                name, email = ticket
-                message = f"Ticket #{ticket_id} ({name}) changed from {current_status} to {new_status}"
-                cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
+            # Create notification
+            message = f"Ticket #{ticket_id} ({ticket_data['name']}) changed from {current_status} to {updated_status}"
+            cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
             
             conn.commit()
             
-            # 2. Update Google Sheets
-            scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-            creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-            client = gspread.authorize(creds)
-            sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
-
-            cell = sheet.find(ticket_id)
-            if cell:
-                headers = sheet.row_values(1)
-                if "สถานะ" in headers:
-                    status_col = headers.index("สถานะ") + 1
-                    sheet.update_cell(cell.row, status_col, new_status)
+            # 2. Update Google Sheets if credentials exist
+            if os.path.exists('credentials.json'):
+                scope = ['https://spreadsheets.google.com/feeds', 
+                        'https://www.googleapis.com/auth/drive']
+                creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+                client = gspread.authorize(creds)
+                
+                try:
+                    sheet = client.open('Tickets').worksheet('sheet1')
+                    cell = sheet.find(ticket_id)
                     
-                    # Prepare payload for LINE notification
-                    row_data = sheet.row_values(cell.row)
-                    ticket_data = dict(zip(headers, row_data))
-                    
-                    payload = {
-                        'ticket_id': ticket_data.get('Ticket ID'),
-                        'user_id': ticket_data.get('User ID'),
-                        'status': new_status,
-                        'email': ticket_data.get('อีเมล'),
-                        'name': ticket_data.get('ชื่อ'),
-                        'phone': ticket_data.get('เบอร์ติดต่อ'),
-                        'department': ticket_data.get('แผนก'),
-                        'created_at': ticket_data.get('วันที่แจ้ง'),
-                        'appointment': ticket_data.get('Appointment'),
-                        'requested': ticket_data.get('Requeste'),
-                        'report': ticket_data.get('Report'),
-                        'type': ticket_data.get('Type'),
-                        'textbox': ticket_data.get('TEXTBOX'),
-                    }
-
-                    notify_user(payload)
-                    
-                return jsonify({"message": "✅ Updated both PostgreSQL and Google Sheets"})
-            return jsonify({"error": "Ticket ID not found in sheet"}), 404
+                    if cell:
+                        headers = sheet.row_values(1)
+                        if "สถานะ" in headers:
+                            status_col = headers.index("สถานะ") + 1
+                            sheet.update_cell(cell.row, status_col, new_status)
+                            
+                            # Prepare payload for LINE notification
+                            ticket_data['status'] = new_status
+                            notify_user(ticket_data)
+                            
+                            return jsonify({
+                                "message": "✅ Updated both PostgreSQL and Google Sheets",
+                                "status": new_status
+                            })
+                    return jsonify({"error": "Ticket ID not found in sheet"}), 404
+                except Exception as e:
+                    print(f"Google Sheets update error: {str(e)}")
+                    return jsonify({
+                        "message": "✅ Updated PostgreSQL but failed to update Google Sheets",
+                        "status": new_status
+                    })
+            else:
+                print("⚠️ credentials.json not found, skipping Google Sheets update")
+                return jsonify({
+                    "message": "✅ Updated PostgreSQL only",
+                    "status": new_status
+                })
         else:
-            return jsonify({"message": "Status unchanged"})
+            return jsonify({"message": "Status unchanged", "status": current_status})
             
     except Exception as e:
+        if conn:
+            conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
-        if 'conn' in locals():
+        if conn:
             conn.close()
 
 
