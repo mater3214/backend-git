@@ -2,6 +2,7 @@ from flask import Flask, jsonify, request
 import requests
 from flask_cors import CORS, cross_origin
 import psycopg2
+from psycopg2.pool import SimpleConnectionPool
 import gspread
 from functools import wraps
 from oauth2client.service_account import ServiceAccountCredentials
@@ -10,15 +11,25 @@ LINE_ACCESS_TOKEN = "0wrW85zf5NXhGWrHRjwxitrZ33JPegxtB749lq9TWRlrlCvfl0CKN9ceTw+
 import time
 app = Flask(__name__)
 CORS(app, resources={
-    r"/api/*": {"origins": "*"},
-    r"/sync-tickets": {"origins": "*"},
-    r"/update-status": {"origins": "*"},
-    r"/clear-textboxes": {"origins": "*"},
-    r"/delete-ticket": {"origins": "*"},
-    r"/update-textbox": {"origins": "*"}
+    r"/api/*": {
+        "origins": ["https://my-frontend-51dy.onrender.com"],
+        "supports_credentials": True,
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"],
+        "expose_headers": ["Content-Type"],
+    },
+    r"/sync-tickets": {
+        "origins": ["https://my-frontend-51dy.onrender.com"],
+        "supports_credentials": True
+    },
+    r"/clear-textboxes": {
+        "origins": ["https://my-frontend-51dy.onrender.com"],
+        "supports_credentials": True
+    }
 })
 
 CORS(app)
+
 
 
 # PostgreSQL config
@@ -32,6 +43,22 @@ DB_PORT = 5432
 SHEET_NAME = 'Tickets'  # ชื่อ Google Sheet ที่มีข้อมูล
 WORKSHEET_NAME = 'sheet1'  # หรือชื่อ sheet ที่มีข้อมูล
 CREDENTIALS_FILE = 'credentials.json'  # path ไปยังไฟล์ service account
+
+
+connection_pool = SimpleConnectionPool(
+    1,  # min connections
+    10, # max connections
+    user=DB_USER,
+    password=DB_PASSWORD,
+    host=DB_HOST,
+    port=DB_PORT,
+    database=DB_NAME
+)
+
+# Get connection from pool
+conn = connection_pool.getconn()
+# use connection
+connection_pool.putconn(conn)
 
 def send_textbox_message(user_id, message_text):
     url = "https://api.line.me/v2/bot/message/push"
@@ -83,6 +110,20 @@ def send_textbox_message(user_id, message_text):
     # ส่งข้อความไปยัง LINE Messaging API
     response = requests.post(url, headers=headers, json=payload)
     return response.status_code == 200
+
+
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    response = jsonify({
+        "error": "Internal Server Error",
+        "message": str(e) if str(e) else "An unexpected error occurred"
+    })
+    response.status_code = 500
+    response.headers.add('Access-Control-Allow-Origin', 'https://my-frontend-51dy.onrender.com')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    return response
+
 
 def notify_user(payload):
     url = "https://api.line.me/v2/bot/message/push"
@@ -615,58 +656,63 @@ def mark_all_notifications_read():
     return jsonify({"success": True})
 
 def create_tickets_table():
-    max_retries = 3
+    max_retries = 5
+    retry_delay = 5  # seconds
     retry_count = 0
     
     while retry_count < max_retries:
         try:
             conn = psycopg2.connect(
-                dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, 
-                host=DB_HOST, port=DB_PORT
+                dbname=DB_NAME,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                host=DB_HOST,
+                port=DB_PORT,
+                connect_timeout=10  # ตั้งค่า timeout เป็น 10 วินาที
             )
             cur = conn.cursor()
             
             # สร้างตาราง tickets
             cur.execute("""
-            CREATE TABLE IF NOT EXISTS tickets (
-                ticket_id TEXT PRIMARY KEY,
-                user_id TEXT,
-                email TEXT,
-                name TEXT,
-                phone TEXT,
-                department TEXT,
-                created_at TIMESTAMP,
-                status TEXT,
-                appointment TEXT,
-                requested TEXT,
-                report TEXT,
-                type TEXT,
-                textbox TEXT
-            );
+                CREATE TABLE IF NOT EXISTS tickets (
+                    ticket_id TEXT PRIMARY KEY,
+                    user_id TEXT,
+                    email TEXT,
+                    name TEXT,
+                    phone TEXT,
+                    department TEXT,
+                    created_at TIMESTAMP,
+                    status TEXT,
+                    appointment TEXT,
+                    requested TEXT,
+                    report TEXT,
+                    type TEXT,
+                    textbox TEXT
+                );
             """)
             
             # สร้างตาราง notifications
             cur.execute("""
-            CREATE TABLE IF NOT EXISTS notifications (
-                id SERIAL PRIMARY KEY,
-                message TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                read BOOLEAN DEFAULT FALSE
-            );
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id SERIAL PRIMARY KEY,
+                    message TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    read BOOLEAN DEFAULT FALSE
+                );
             """)
             
             # สร้างตาราง messages
             cur.execute("""
-            CREATE TABLE IF NOT EXISTS messages (
-                id SERIAL PRIMARY KEY,
-                ticket_id TEXT REFERENCES tickets(ticket_id),
-                admin_id TEXT,
-                sender_name TEXT,
-                message TEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_read BOOLEAN DEFAULT FALSE,
-                is_admin_message BOOLEAN DEFAULT FALSE
-            );
+                CREATE TABLE IF NOT EXISTS messages (
+                    id SERIAL PRIMARY KEY,
+                    ticket_id TEXT REFERENCES tickets(ticket_id),
+                    admin_id TEXT,
+                    sender_name TEXT,
+                    message TEXT NOT NULL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_read BOOLEAN DEFAULT FALSE,
+                    is_admin_message BOOLEAN DEFAULT FALSE
+                );
             """)
             
             conn.commit()
@@ -679,7 +725,11 @@ def create_tickets_table():
             if retry_count == max_retries:
                 print("❌ Failed to connect to database after retries")
                 return False
-            time.sleep(2)
+            time.sleep(retry_delay)
+            
+        except KeyboardInterrupt:
+            print("\n🛑 Received keyboard interrupt. Exiting...")
+            return False
             
         except Exception as e:
             print(f"❌ Error creating tables: {str(e)}")
@@ -960,11 +1010,13 @@ def auto_clear_textbox():
             conn.close()
 
 @app.route('/clear-textboxes', methods=['POST', 'OPTIONS'])
-@cross_origin()  # เพิ่ม decorator นี้
+@cross_origin(supports_credentials=True)  # เพิ่ม supports_credentials=True
 def clear_textboxes():
     if request.method == 'OPTIONS':
-        return '', 200  # ตอบกลับ preflight request
-    
+        response = jsonify({"message": "Preflight request successful"})
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response, 200
+
     try:
         conn = psycopg2.connect(
             dbname=DB_NAME, user=DB_USER, password=DB_PASSWORD, 
@@ -987,7 +1039,9 @@ def clear_textboxes():
         """)
 
         # 3. อัปเดต Google Sheets
-        scope = ['https://spreadsheets.google.com/feed', 'https://www.googleapis.com/auth/drive']
+        scope = ['https://spreadsheets.google.com/feeds', 
+                'https://www.googleapis.com/auth/drive',
+                'https://www.googleapis.com/auth/spreadsheets']
         creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
         client = gspread.authorize(creds)
         
@@ -1012,7 +1066,7 @@ def clear_textboxes():
                 "success": True,
                 "cleared_count": len(tickets_with_textbox),
                 "message": f"Cleared {len(tickets_with_textbox)} textboxes"
-            })
+            }), 200
             
         except Exception as e:
             conn.rollback()
@@ -1151,6 +1205,50 @@ def update_textbox():
         return jsonify({"error": "Ticket ID not found in sheet"}), 404
     except Exception as e:
         return jsonify({"error": f"Google Sheets error: {str(e)}"}), 500
+
+def execute_sql(query, params=None, fetch=False):
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            conn = psycopg2.connect(
+                dbname=DB_NAME,
+                user=DB_USER,
+                password=DB_PASSWORD,
+                host=DB_HOST,
+                port=DB_PORT,
+                connect_timeout=10
+            )
+            cur = conn.cursor()
+            
+            cur.execute(query, params or ())
+            
+            if fetch:
+                result = cur.fetchall()
+            else:
+                conn.commit()
+                result = None
+                
+            return result
+            
+        except psycopg2.OperationalError as e:
+            retry_count += 1
+            print(f"Database connection error (retry {retry_count}): {str(e)}")
+            if retry_count == max_retries:
+                raise e
+            time.sleep(2)
+            
+        except Exception as e:
+            print(f"SQL execution error: {str(e)}")
+            if 'conn' in locals():
+                conn.rollback()
+            raise e
+            
+        finally:
+            if 'conn' in locals():
+                conn.close()
+
 
 @app.route('/api/email-rankings')
 @cross_origin()
@@ -1723,8 +1821,11 @@ def mark_messages_read():
     
     return jsonify({"success": True})
 
-def get_db_connection(max_retries=3, retry_delay=2):
+def get_db_connection():
+    max_retries = 3
+    retry_delay = 2
     retry_count = 0
+    
     while retry_count < max_retries:
         try:
             conn = psycopg2.connect(
@@ -1783,16 +1884,30 @@ def sync_route():
         return jsonify({"error": "Internal server error", "details": str(e)}), 500
 
 if __name__ == '__main__':
-    if not create_tickets_table():
-        print("❌ Cannot proceed without database tables")
-        exit(1)
-    print("🔄 Starting sync process...")
+    print("🔄 Starting database setup...")
     try:
-        new_tickets = sync_google_sheet_to_postgres()
-        if new_tickets is not None:
-            print(f"✅ Sync completed. Found {len(new_tickets)} new tickets")
-        else:
-            print("❌ Sync failed")
+        if not create_tickets_table():
+            print("❌ Cannot proceed without database tables")
+            exit(1)
+        
+        print("🔄 Starting sync process...")
+        try:
+            new_tickets = sync_google_sheet_to_postgres()
+            if new_tickets is not None:
+                print(f"✅ Sync completed. Found {len(new_tickets)} new tickets")
+            else:
+                print("❌ Sync failed")
+        except Exception as e:
+            print(f"❌ Error during sync: {str(e)}")
+        
+        # เริ่ม Flask server
+        print("🚀 Starting Flask server...")
+        app.run(debug=True, host='0.0.0.0', port=5000)
+        
+    except KeyboardInterrupt:
+        print("\n🛑 Server stopped by user")
+        exit(0)
+        
     except Exception as e:
-        print(f"❌ Error during sync: {str(e)}")
-    app.run(debug=True)
+        print(f"❌ Fatal error: {str(e)}")
+        exit(1)
