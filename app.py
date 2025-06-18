@@ -632,7 +632,7 @@ def sync_google_sheet_to_postgres():
                 # Check if this is a new ticket
                 if ticket_id not in existing_tickets:
                     new_tickets.append(row)
-                    message = f"New ticket created: #{ticket_id} - {row.get('ชื่อ', '')} ({row.get('แผนก', ''))"
+                    message = f"New ticket created: #{ticket_id} - {row.get('ชื่อ', '')} ({row.get('แผนก', '')})"
                     cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
 
             except Exception as e:
