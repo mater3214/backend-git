@@ -7,9 +7,28 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 LINE_ACCESS_TOKEN = "0wrW85zf5NXhGWrHRjwxitrZ33JPegxtB749lq9TWRlrlCvfl0CKN9ceTw+kzPqBc6yjEOlV3EJOqUsBNhiFGQu3asN1y6CbHIAkJINhHNWi5gY9+O3+SnvrPaZzI7xbsBuBwe8XdIx33wdAN+79bgdB04t89/1O/w1cDnyilFU="
 
-app = Flask(__name__)
 
-CORS(app)
+app = Flask(__name__)
+from flask_cors import CORS
+
+
+CORS(app, resources={
+    r"/api/*": {
+        "origins": ["https://my-frontend-51dy.onrender.com", "http://localhost:3000"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    },
+    r"/sync-tickets": {
+        "origins": ["https://my-frontend-51dy.onrender.com", "http://localhost:3000"],
+        "methods": ["GET"],
+        "allow_headers": ["Content-Type"]
+    },
+    r"/update-status": {
+        "origins": ["https://my-frontend-51dy.onrender.com", "http://localhost:3000"],
+        "methods": ["POST"],
+        "allow_headers": ["Content-Type"]
+    }
+})
 
 # PostgreSQL config
 DB_NAME = 'flask_pg'
@@ -22,6 +41,11 @@ DB_PORT = 5432
 SHEET_NAME = 'Tickets'  # ชื่อ Google Sheet ที่มีข้อมูล
 WORKSHEET_NAME = 'sheet1'  # หรือชื่อ sheet ที่มีข้อมูล
 CREDENTIALS_FILE = 'credentials.json'  # path ไปยังไฟล์ service account
+
+@app.before_request
+def log_request_info():
+    app.logger.debug('Headers: %s', request.headers)
+    app.logger.debug('Body: %s', request.get_data())
 
 def send_textbox_message(user_id, message_text):
     url = "https://api.line.me/v2/bot/message/push"
@@ -1465,6 +1489,10 @@ def update_ticket():
 @app.route('/api/messages', methods=['GET'])
 def get_messages():
     ticket_id = request.args.get('ticket_id')
+    
+    if ticket_id == "announcement":
+        return jsonify([])
+        
     if not ticket_id:
         return jsonify({"error": "Ticket ID is required"}), 400
 
@@ -1473,7 +1501,6 @@ def get_messages():
     )
     cur = conn.cursor()
     
-    # ดึงข้อความทั้งหมดสำหรับ ticket_id นั้นๆ เรียงตามเวลาจากเก่าสุดไปใหม่สุด
     cur.execute("""
         SELECT id, ticket_id, admin_id, sender_name, message, timestamp, is_read, is_admin_message
         FROM messages
