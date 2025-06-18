@@ -138,97 +138,300 @@ def send_textbox_message(user_id, message_text):
         return False
 
 def notify_user(payload):
-    try:
-        # Check if user_id exists and LINE_ACCESS_TOKEN is configured
-        if not payload.get('user_id') or not LINE_ACCESS_TOKEN:
-            print("LINE notification skipped - missing user_id or access token")
-            return False
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"
+    }
 
-        url = "https://api.line.me/v2/bot/message/push"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"
-        }
+    # แปลง payload เป็น Flex Message แบบเดียวกับใน Apps Script
+    flex_message = create_flex_message(payload)
 
-        # Format appointment date if exists
-        appointment_date = '-'
-        if payload.get('appointment'):
-            try:
-                dt = datetime.strptime(payload['appointment'], '%Y-%m-%d %H:%M:%S')
-                appointment_date = dt.strftime('%d/%m/%Y %H:%M')
-            except ValueError:
-                appointment_date = payload['appointment']
+    body = {
+        "to": payload['user_id'],
+        "messages": [flex_message]
+    }
 
-        # Create flex message
-        flex_message = {
-            "type": "flex",
-            "altText": "Ticket Status Update",
-            "contents": {
-                "type": "bubble",
-                "body": {
-                    "type": "box",
-                    "layout": "vertical",
-                    "contents": [
-                        {
-                            "type": "text",
-                            "text": "📢 Ticket Status Update",
-                            "weight": "bold",
-                            "size": "lg",
-                            "color": "#005BBB"
-                        },
-                        {
-                            "type": "separator",
-                            "margin": "md"
-                        },
-                        {
-                            "type": "text",
-                            "text": f"Ticket ID: {payload.get('ticket_id', 'N/A')}",
-                            "margin": "md"
-                        },
-                        {
-                            "type": "text",
-                            "text": f"Status: {payload.get('status', 'N/A')}",
-                            "margin": "sm"
-                        },
-                        {
-                            "type": "text",
-                            "text": f"Updated at: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-                            "margin": "sm",
-                            "size": "sm",
-                            "color": "#666666"
-                        },
-                        {
-                            "type": "text",
-                            "text": f"Appointment: {appointment_date}",
-                            "margin": "sm",
-                            "size": "sm"
-                        }
-                    ]
-                }
+    response = requests.post(url, headers=headers, json=body)
+    return response.status_code == 200
+
+
+
+def create_flex_message(payload):
+    appointment_date = '-'
+    if payload.get('appointment'):
+        try:
+            dt = datetime.strptime(payload['appointment'], '%Y-%m-%d %H:%M:%S')
+            appointment_date = dt.strftime('%d/%m/%Y %H:%M')
+        except:
+            appointment_date = payload['appointment']
+    status = payload.get('status', 'ไม่ระบุ')
+    status_color = {
+        'Pending': '#FF9900',
+        'Completed': '#00AA00',
+        'Rejected': '#FF0000',
+        'In Progress': '#0066FF'
+    }.get(status, '#666666')
+
+    return {
+        "type": "flex",
+        "altText": "อัปเดตสถานะ Ticket ของคุณ",
+        "contents": {
+            "type": "bubble",
+            "size": "giga",
+            "header": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "📢 อัปเดตสถานะ Ticket",
+                        "weight": "bold",
+                        "size": "lg",
+                        "color": "#FFFFFF",
+                        "align": "center"
+                    }
+                ],
+                "backgroundColor": "#005BBB",
+                "paddingAll": "20px"
+            },
+            "body": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "หมายเลข",
+                                "weight": "bold",
+                                "size": "sm",
+                                "flex": 2,
+                                "color": "#666666"
+                            },
+                            {
+                                "type": "text",
+                                "text": payload.get('ticket_id', ''),
+                                "size": "sm",
+                                "flex": 4,
+                                "align": "end"
+                            }
+                        ],
+                        "spacing": "sm",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "separator",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "ชื่อ",
+                                "weight": "bold",
+                                "size": "sm",
+                                "flex": 2,
+                                "color": "#666666"
+                            },
+                            {
+                                "type": "text",
+                                "text": payload.get('name', ''),
+                                "size": "sm",
+                                "flex": 4,
+                                "align": "end"
+                            }
+                        ],
+                        "spacing": "sm",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "separator",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "แผนก",
+                                "weight": "bold",
+                                "size": "sm",
+                                "flex": 2,
+                                "color": "#666666"
+                            },
+                            {
+                                "type": "text",
+                                "text": payload.get('department', ''),
+                                "size": "sm",
+                                "flex": 4,
+                                "align": "end"
+                            }
+                        ],
+                        "spacing": "sm",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "separator",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "เบอร์ติดต่อ",
+                                "weight": "bold",
+                                "size": "sm",
+                                "flex": 2,
+                                "color": "#666666"
+                            },
+                            {
+                                "type": "text",
+                                "text": payload.get('phone', ''),
+                                "size": "sm",
+                                "flex": 4,
+                                "align": "end"
+                            }
+                        ],
+                        "spacing": "sm",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "separator",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "Type",
+                                "weight": "bold",
+                                "size": "sm",
+                                "flex": 2,
+                                "color": "#666666"
+                            },
+                            {
+                                "type": "text",
+                                "text": payload.get('type', ''),
+                                "size": "sm",
+                                "flex": 4,
+                                "align": "end"
+                            }
+                        ],
+                        "spacing": "sm",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "separator",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "ปัญหา",
+                                "weight": "bold",
+                                "size": "sm",
+                                "flex": 2,
+                                "color": "#666666"
+                            },
+                            {
+                                "type": "text",
+                                "text": payload.get('report', 'ไม่มีข้อมูล'),
+                                "size": "sm",
+                                "flex": 4,
+                                "align": "end",
+                                "wrap": True
+                            }
+                        ],
+                        "spacing": "sm",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "separator",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "box",
+                        "layout": "horizontal",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "วันที่นัดหมาย",
+                                "weight": "bold",
+                                "size": "sm",
+                                "flex": 2,
+                                "color": "#666666"
+                            },
+                            {
+                                "type": "text",
+                                "text": appointment_date,
+                                "size": "sm",
+                                "flex": 4,
+                                "align": "end"
+                            }
+                        ],
+                        "spacing": "sm",
+                        "margin": "md"
+                    },
+                    {
+                        "type": "box",
+                        "layout": "vertical",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "สถานะล่าสุด",
+                                "weight": "bold",
+                                "size": "sm",
+                                "color": "#666666",
+                                "margin": "md"
+                            },
+                            {
+                                "type": "text",
+                                "text": status,
+                                "weight": "bold",
+                                "size": "xl",
+                                "color": status_color,
+                                "align": "center",
+                                "margin": "sm"
+                            }
+                        ],
+                        "backgroundColor": "#F5F5F5",
+                        "cornerRadius": "md",
+                        "margin": "xl",
+                        "paddingAll": "md"
+                    }
+                ],
+                "spacing": "md",
+                "paddingAll": "20px"
+            },
+            "footer": {
+                "type": "box",
+                "layout": "vertical",
+                "contents": [
+                    {
+                        "type": "text",
+                        "text": "ขอบคุณที่ใช้บริการของเรา",
+                        "size": "xs",
+                        "color": "#888888",
+                        "align": "center"
+                    }
+                ],
+                "paddingAll": "10px"
             }
         }
-
-        # Prepare payload
-        message = {
-            "to": payload['user_id'],
-            "messages": [flex_message]
-        }
-
-        response = requests.post(url, headers=headers, json=message, timeout=10)
-        
-        if response.status_code != 200:
-            print(f"LINE API Error: {response.status_code} - {response.text}")
-            return False
-            
-        print(f"Notification sent to user {payload['user_id']}")
-        return True
-        
-    except requests.exceptions.RequestException as e:
-        print(f"Request error in notify_user: {str(e)}")
-        return False
-    except Exception as e:
-        print(f"Unexpected error in notify_user: {str(e)}")
-        return False
+    }
 
 
 
