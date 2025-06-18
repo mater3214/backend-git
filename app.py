@@ -5,6 +5,7 @@ import psycopg2
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+import os
 LINE_ACCESS_TOKEN = "0wrW85zf5NXhGWrHRjwxitrZ33JPegxtB749lq9TWRlrlCvfl0CKN9ceTw+kzPqBc6yjEOlV3EJOqUsBNhiFGQu3asN1y6CbHIAkJINhHNWi5gY9+O3+SnvrPaZzI7xbsBuBwe8XdIx33wdAN+79bgdB04t89/1O/w1cDnyilFU="
 
 
@@ -102,22 +103,72 @@ def send_textbox_message(user_id, message_text):
     return response.status_code == 200
 
 def notify_user(payload):
-    url = "https://api.line.me/v2/bot/message/push"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"
-    }
+    try:
+        url = "https://api.line.me/v2/bot/message/push"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"
+        }
 
-    # แปลง payload เป็น Flex Message แบบเดียวกับใน Apps Script
-    flex_message = create_flex_message(payload)
+        # Prepare LINE message payload
+        message = {
+            "to": payload['user_id'],
+            "messages": [
+                {
+                    "type": "flex",
+                    "altText": "Ticket Status Update",
+                    "contents": {
+                        "type": "bubble",
+                        "body": {
+                            "type": "box",
+                            "layout": "vertical",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "📢 Ticket Status Update",
+                                    "weight": "bold",
+                                    "size": "lg",
+                                    "color": "#005BBB"
+                                },
+                                {
+                                    "type": "separator",
+                                    "margin": "md"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": f"Ticket ID: {payload.get('ticket_id', 'N/A')}",
+                                    "margin": "md"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": f"Status: {payload.get('status', 'N/A')}",
+                                    "margin": "sm"
+                                },
+                                {
+                                    "type": "text",
+                                    "text": f"Updated at: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                                    "margin": "sm",
+                                    "size": "sm",
+                                    "color": "#666666"
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
 
-    body = {
-        "to": payload['user_id'],
-        "messages": [flex_message]
-    }
-
-    response = requests.post(url, headers=headers, json=body)
-    return response.status_code == 200
+        response = requests.post(url, headers=headers, json=message)
+        
+        if response.status_code != 200:
+            print(f"LINE API Error: {response.status_code} - {response.text}")
+            return False
+            
+        return True
+        
+    except Exception as e:
+        print(f"Error in notify_user: {str(e)}")
+        return False
 
 
 
@@ -1007,7 +1058,6 @@ def auto_clear_textbox():
 @app.route('/clear-textboxes', methods=['POST'])
 def clear_textboxes():
     try:
-        # เชื่อมต่อกับฐานข้อมูล
         conn = psycopg2.connect(
             dbname=DB_NAME, user=DB_USER, 
             password=DB_PASSWORD, host=DB_HOST, port=DB_PORT
@@ -1016,10 +1066,10 @@ def clear_textboxes():
 
         # 1. ค้นหา tickets ที่มี textbox ไม่ว่าง
         cur.execute("""
-            SELECT ticket_id, textbox FROM tickets 
+            SELECT ticket_id FROM tickets 
             WHERE textbox IS NOT NULL AND textbox != ''
         """)
-        tickets_with_textbox = cur.fetchall()
+        tickets_with_textbox = [row[0] for row in cur.fetchall()]
 
         # 2. ลบ textbox ใน PostgreSQL
         cur.execute("""
@@ -1030,7 +1080,18 @@ def clear_textboxes():
 
         # 3. อัปเดต Google Sheets
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+        
+        # ตรวจสอบว่าไฟล์ credentials.json มีอยู่
+        if not os.path.exists('credentials.json'):
+            print("❌ credentials.json not found, skipping Google Sheets update")
+            conn.commit()
+            return jsonify({
+                "success": True,
+                "cleared_count": len(tickets_with_textbox),
+                "message": f"Cleared {len(tickets_with_textbox)} textboxes in database only"
+            })
+            
+        creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
         client = gspread.authorize(creds)
         sheet = client.open(SHEET_NAME).worksheet(WORKSHEET_NAME)
 
@@ -1038,8 +1099,7 @@ def clear_textboxes():
         if "TEXTBOX" in headers:
             textbox_col = headers.index("TEXTBOX") + 1
             
-            for ticket in tickets_with_textbox:
-                ticket_id = ticket[0]
+            for ticket_id in tickets_with_textbox:
                 try:
                     cell = sheet.find(ticket_id)
                     if cell:
@@ -1055,6 +1115,9 @@ def clear_textboxes():
         })
 
     except Exception as e:
+        print(f"Error in clear_textboxes: {str(e)}")
+        if 'conn' in locals():
+            conn.rollback()
         return jsonify({"error": str(e)}), 500
     finally:
         if 'conn' in locals():
