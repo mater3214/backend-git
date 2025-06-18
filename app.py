@@ -19,16 +19,10 @@ cors = CORS(app, resources={
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"],
-        "supports_credentials": True
+        "supports_credentials": True,
+        "expose_headers": ["Content-Type"]
     }
 })
-
-# PostgreSQL config
-DB_NAME = 'flask_pg'
-DB_USER = 'flask_pg_user'
-DB_PASSWORD = 'N5U6ELzotV0Zog1lG1pRDzNYtiMzgCQg'
-DB_HOST = 'dpg-d18dv3ruibrs73bq92ug-a.singapore-postgres.render.com'
-DB_PORT = 5432
 
 @app.after_request
 def after_request(response):
@@ -36,7 +30,15 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
     response.headers.add('Access-Control-Allow-Credentials', 'true')
+    response.headers.add('Access-Control-Expose-Headers', 'Content-Type')
     return response
+
+# PostgreSQL config
+DB_NAME = 'flask_pg'
+DB_USER = 'flask_pg_user'
+DB_PASSWORD = 'N5U6ELzotV0Zog1lG1pRDzNYtiMzgCQg'
+DB_HOST = 'dpg-d18dv3ruibrs73bq92ug-a.singapore-postgres.render.com'
+DB_PORT = 5432
 
 # Google Sheets config
 SHEET_NAME = 'Tickets'  # ชื่อ Google Sheet ที่มีข้อมูล
