@@ -58,7 +58,7 @@ def send_textbox_message(user_id, message_text):
         "Authorization": f"Bearer {LINE_ACCESS_TOKEN}"
     }
 
-    # สร้าง Flex Message สำหรับ textbox reply
+    # Create a more informative Flex Message
     payload = {
         "to": user_id,
         "messages": [
@@ -67,17 +67,27 @@ def send_textbox_message(user_id, message_text):
                 "altText": "ข้อความจากเจ้าหน้าที่",
                 "contents": {
                     "type": "bubble",
-                    "body": {
+                    "size": "giga",
+                    "header": {
                         "type": "box",
                         "layout": "vertical",
                         "contents": [
                             {
                                 "type": "text",
-                                "text": "💼 ตอบกลับจากเจ้าหน้าที่",
+                                "text": "📬 ข้อความจากเจ้าหน้าที่",
                                 "weight": "bold",
                                 "size": "lg",
-                                "color": "#005BBB"
-                            },
+                                "color": "#FFFFFF",
+                                "align": "center"
+                            }
+                        ],
+                        "backgroundColor": "#005BBB",
+                        "paddingAll": "20px"
+                    },
+                    "body": {
+                        "type": "box",
+                        "layout": "vertical",
+                        "contents": [
                             {
                                 "type": "text",
                                 "text": message_text,
@@ -85,22 +95,47 @@ def send_textbox_message(user_id, message_text):
                                 "margin": "md"
                             },
                             {
-                                "type": "text",
-                                "text": "พิมพ์ 'จบ' เพื่อสิ้นสุดการสนทนา",
-                                "size": "sm",
-                                "color": "#AAAAAA",
+                                "type": "separator",
                                 "margin": "md"
+                            },
+                            {
+                                "type": "text",
+                                "text": "คุณสามารถตอบกลับได้โดยการกดปุ่ม 'เมนูเลือกติดต่อหน้าที่อีกครั้ง' ⚠️หากมีปัญหาสอบถาม",
+                                "size": "sm",
+                                "color": "#888888",
+                                "margin": "md",
+                                "wrap": True
                             }
-                        ]
+                        ],
+                        "paddingAll": "20px"
+                    },
+                    "footer": {
+                        "type": "box",
+                        "layout": "vertical",
+                        "contents": [
+                            {
+                                "type": "text",
+                                "text": "ขอบคุณที่ใช้บริการของเรา",
+                                "size": "xs",
+                                "color": "#888888",
+                                "align": "center"
+                            }
+                        ],
+                        "paddingAll": "10px"
                     }
                 }
             }
         ]
     }
 
-    # ส่งข้อความไปยัง LINE Messaging API
-    response = requests.post(url, headers=headers, json=payload)
-    return response.status_code == 200
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code != 200:
+            print(f"LINE API Error: {response.status_code} - {response.text}")
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Error sending LINE message: {str(e)}")
+        return False
 
 def notify_user(payload):
     try:
@@ -575,7 +610,7 @@ def sync_google_sheet_to_postgres():
                         ticket_id, user_id, email, name, phone,
                         department, created_at, status, appointment,
                         requested, report, type, textbox
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (ticket_id) DO UPDATE SET
                         user_id = EXCLUDED.user_id,
                         email = EXCLUDED.email,
@@ -597,7 +632,7 @@ def sync_google_sheet_to_postgres():
                 # Check if this is a new ticket
                 if ticket_id not in existing_tickets:
                     new_tickets.append(row)
-                    message = f"New ticket created: #{ticket_id} - {row.get('ชื่อ', '')} ({row.get('แผนก', '')})"
+                    message = f"New ticket created: #{ticket_id} - {row.get('ชื่อ', '')} ({row.get('แผนก', ''))"
                     cur.execute("INSERT INTO notifications (message) VALUES (%s)", (message,))
 
             except Exception as e:
@@ -979,7 +1014,6 @@ def update_status():
     finally:
         if conn:
             conn.close()
-
 
 @app.route('/delete-ticket', methods=['POST'])
 def delete_ticket():
