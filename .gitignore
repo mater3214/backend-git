@@ -1,3 +1,4 @@
+credentials.json
 __pycache__/
 *.pyc
 *.pyo
@@ -5,4 +6,3 @@ __pycache__/
 .DS_Store
 .venv
 .env
-credentials.json
